@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG 知識庫搜索</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="apple-touch-icon" href="apple-touch-icon.png">
+    <link rel="apple-touch-icon-precomposed" href="apple-touch-icon-precomposed.png">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/github-markdown-css/github-markdown.css">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .input-area {
+            margin-bottom: 20px;
+            position: relative;
+        }
+        textarea {
+            width: 100%;
+            height: 100px;
+            padding: 10px;
+            margin-bottom: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+            font-size: 16px;
+        }
+        .button-group {
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        button.clear {
+            background-color: #f44336;
+        }
+        button.clear:hover {
+            background-color: #d32f2f;
+        }
+        .chat-container {
+            max-height: 500px;
+            overflow-y: auto;
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        .message {
+            margin-bottom: 15px;
+            padding: 10px;
+            border-radius: 4px;
+        }
+        .user-message {
+            background-color: #e3f2fd;
+            margin-left: 20%;
+        }
+        .ai-message {
+            background-color: #f5f5f5;
+            margin-right: 20%;
+        }
+        .message-content {
+            margin: 0;
+            line-height: 1.5;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 10px 0;
+        }
+        .loading:after {
+            content: '處理中';
+            animation: dots 1.5s steps(5, end) infinite;
+        }
+        @keyframes dots {
+            0%, 20% { content: '處理中'; }
+            40% { content: '處理中.'; }
+            60% { content: '處理中..'; }
+            80% { content: '處理中...'; }
+        }
+        .markdown-body {
+            background-color: transparent;
+            font-size: 16px;
+        }
+        .timestamp {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>RAG 知識庫搜索</h1>
+        <div class="input-area">
+            <textarea id="userInput" placeholder="請輸入您的問題..."></textarea>
+            <div class="button-group">
+                <button onclick="sendRequest()">發送</button>
+                <button class="clear" onclick="clearChat()">清除對話</button>
+            </div>
+        </div>
+        <div id="loading" class="loading"></div>
+        <div id="chatContainer" class="chat-container"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        let chatHistory = [];
+        let currentUser = 'user_' + Math.random().toString(36).substr(2, 9); // 生成隨機用戶ID
+
+        // 頁面載入時讀取對話記錄
+        window.onload = function() {
+            loadChatHistory();
+            updateUserInfo();
+        };
+
+        function updateUserInfo() {
+            const userInfo = document.createElement('div');
+            userInfo.className = 'user-info';
+            userInfo.textContent = `當前用戶: ${currentUser}`;
+            document.querySelector('.container').insertBefore(userInfo, document.querySelector('.input-area'));
+        }
+
+        function loadChatHistory() {
+            const savedHistory = localStorage.getItem(`chat_history_${currentUser}`);
+            if (savedHistory) {
+                chatHistory = JSON.parse(savedHistory);
+                displayChatHistory();
+            }
+        }
+
+        function saveChatHistory() {
+            localStorage.setItem(`chat_history_${currentUser}`, JSON.stringify(chatHistory));
+        }
+
+        function displayChatHistory() {
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.innerHTML = '';
+            
+            chatHistory.forEach(msg => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${msg.sender}-message`;
+                
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content markdown-body';
+                contentDiv.innerHTML = marked.parse(msg.content);
+                
+                const timestamp = document.createElement('div');
+                timestamp.className = 'timestamp';
+                timestamp.textContent = new Date(msg.timestamp).toLocaleTimeString();
+                
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(timestamp);
+                chatContainer.appendChild(messageDiv);
+            });
+            
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        function sendRequest() {
+            const userInput = document.getElementById('userInput').value;
+            const loading = document.getElementById('loading');
+            const chatContainer = document.getElementById('chatContainer');
+
+            if (!userInput.trim()) {
+                alert('請輸入問題！');
+                return;
+            }
+
+            addMessage(userInput, 'user');
+            document.getElementById('userInput').value = '';
+            loading.style.display = 'block';
+
+            const payload = {
+                "input_value": userInput,
+                "output_type": "chat",
+                "input_type": "chat",
+                "session_id": currentUser
+            };
+
+            const options = {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            };
+
+            // 使用ngrok提供的HTTPS URL
+            const API_ENDPOINT = window.API_ENDPOINT || 'https://your-ngrok-url.ngrok.io'; // 替換為您的ngrok URL
+            fetch(`${API_ENDPOINT}/api/v1/run/a484da0d-c0f0-464b-8bdd-be4578bef19c`, options)
+                .then(response => response.json())
+                .then(response => {
+                    const aiResponse = response.outputs[0].outputs[0].results.message.text;
+                    addMessage(aiResponse, 'ai');
+                })
+                .catch(err => {
+                    addMessage('發生錯誤：' + err.message, 'ai');
+                })
+                .finally(() => {
+                    loading.style.display = 'none';
+                });
+        }
+
+        function addMessage(content, sender) {
+            const chatContainer = document.getElementById('chatContainer');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${sender}-message`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content markdown-body';
+            contentDiv.innerHTML = marked.parse(content);
+            
+            const timestamp = document.createElement('div');
+            timestamp.className = 'timestamp';
+            const now = new Date();
+            timestamp.textContent = now.toLocaleTimeString();
+            
+            messageDiv.appendChild(contentDiv);
+            messageDiv.appendChild(timestamp);
+            chatContainer.appendChild(messageDiv);
+            
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            
+            chatHistory.push({
+                content,
+                sender,
+                timestamp: now.toISOString()
+            });
+            
+            saveChatHistory();
+        }
+
+        function clearChat() {
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.innerHTML = '';
+            chatHistory = [];
+            saveChatHistory();
+        }
+
+        // 添加Enter鍵發送功能
+        document.getElementById('userInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendRequest();
+            }
+        });
+    </script>
+</body>
+</html> 
